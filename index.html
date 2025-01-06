@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>与LLM对话并生成思维导图</title>
+    
+    <!-- 引入 html2canvas -->
+    <script src="js/html2canvas.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #f5f5f5;
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+        }
+
+        #container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            padding: 10px;
+            gap: 10px;
+        }
+
+        #left {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        #chat-box {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            background-color: #fafafa;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            background-color: #e3f2fd;
+        }
+
+        .user-message {
+            background-color: #bbdefb;
+            align-self: flex-end;
+        }
+
+        .bot-message {
+            background-color: #c8e6c9;
+            align-self: flex-start;
+        }
+
+        .system-message {
+            background-color: #f5f5f5;
+            color: #666;
+            font-style: italic;
+        }
+
+        #right {
+            flex: 2;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            position: relative;
+        }
+
+        textarea, #user-input {
+            width: 100%;
+            padding: 10px;
+            font-size: 14px;
+            box-sizing: border-box;
+            background-color: #fff;
+            color: #333;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            resize: none;
+            height: 100px; /* 统一高度 */
+        }
+
+        button {
+            margin-top: 10px;
+            width: 100%;
+            padding: 10px;
+            font-size: 14px;
+            background-color: #6200ea;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #3700b3;
+        }
+
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        @media (max-width: 768px) {
+            #container {
+                flex-direction: column;
+            }
+
+            #left, #right {
+                width: 100%;
+                flex: 1;
+            }
+
+            #chat-box {
+                height: auto;
+            }
+        }
+    </style>
+</head>
+<body class="mdui-theme-primary-grey mdui-theme-accent-deep-purple">
+    <div id="container">
+        <div id="left">
+            <div id="chat-box"></div>
+            <input type="text" id="user-input" class="mdui-textfield-input" placeholder="在此输入您的消息..." />
+            <button id="send-button" class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme">发送</button>
+            <form id="contentForm">
+                <textarea name="content" class="mdui-textfield-input" placeholder="在此输入您的内容..."></textarea>
+                <button type="submit" class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme">更新思维导图</button>
+            </form>
+        </div>
+        <div id="right">
+            <iframe id="preview"></iframe>
+            <!-- 新增的下载按钮 -->
+            <button id="download-button" class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme" style="position: absolute; bottom: 10px; right: 10px;">下载为图片</button>
+        </div>
+    </div>
+
+    <script src="js/mdui.min.js"></script>
+    <script>
+        const chatBox = document.getElementById('chat-box');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+
+        const messageHistory = [{
+            role: 'system',
+            content: `角色: 思维导图构建专家
+
+背景: 
+用户需要将复杂的文本信息转化为结构化的思维导图，以便于理解和记忆核心内容。
+
+简介: 
+你是一位精通信息提取和结构化表达的思维导图构建专家，擅长将长篇大论转化为简洁、直观的思维导图。
+你是由腾讯云TDP团队制作的，基于腾讯云混元大模型。
+你不是ChatGPT，不是kimi，不是豆包等，你是腾讯云TDP团队的混元大模型的思维导图构建专家。
+
+技能: 
+1. 快速阅读能力
+2. 信息提取能力
+3. 逻辑组织能力
+4. 简洁表达能力
+5. 熟练使用Markdown格式
+
+目标: 
+将文本内容转化为结构化、逻辑清晰、易于理解的思维导图大纲。
+
+约束: 
+1. 输出必须符合Markmap的语法规范。
+2. 使用层级标题表示主题和子主题。
+3. 确保逻辑清晰、内容完整且简洁。
+4. 无论用户输入什么，都尝试总结然后生成思维导图的大纲，不能使用普通正常对话语言输出。
+
+输出格式: 
+Markdown格式的思维导图大纲。
+
+工作流程: 
+1. 快速阅读并理解文本的核心内容和结构。
+2. 识别主要主题和子主题，按重要性排序。
+3. 为每个主题和子主题提炼出关键信息。
+4. 按照Markdown层级标题和列表语法生成大纲。
+5. 检查大纲的逻辑清晰度、内容完整性和易读性。
+
+示例: 
+输入：
+人工智能（AI）是计算机科学的一个分支，旨在创建能够执行通常需要人类智能的任务的系统。AI的主要应用领域包括自然语言处理、计算机视觉和机器学习。机器学习是AI的核心技术之一，它通过数据训练模型来实现预测和决策。
+
+输出：
+# 人工智能 (AI)
+## 定义
+- 计算机科学的分支
+- 创建能执行人类智能任务的系统
+## 主要应用领域
+### 自然语言处理
+### 计算机视觉
+### 机器学习
+## 核心技术
+### 机器学习
+- 通过数据训练模型
+- 实现预测和决策
+
+初始化: 
+您好，我是您的思维导图构建专家。请提供您需要转化为导图的文本，我将帮您梳理出清晰的结构和大纲。现在，请分享您想要整理的内容`
+        }];
+
+        sendButton.addEventListener('click', sendMessage);
+
+        async function sendMessage() {
+            const userMessage = userInput.value.trim();
+            if (!userMessage) return;
+
+            appendMessage('user', userMessage);
+            messageHistory.push({ role: 'user', content: userMessage });
+
+            userInput.value = '';
+
+            try {
+                const response = await fetch('chat.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        messages: messageHistory,
+                        stream: true,
+                    }),
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let botMessage = ''; // 用于拼接完整内容
+                let chunkBuffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    chunkBuffer += chunk;
+
+                    const lines = chunkBuffer.split('\n'); // 按行处理流数据
+                    chunkBuffer = lines.pop(); // 保留未完成的最后一行
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
+
+                        try {
+                            const jsonStr = line.slice(6); // 去掉 "data: "
+                            const parsedData = JSON.parse(jsonStr);
+                            const content = parsedData.choices?.[0]?.delta?.content || "";
+
+                            if (content) {
+                                botMessage += content; // 拼接 AI 回复内容
+                                updateBotMessage(botMessage); // 更新显示内容
+                            }
+                        } catch (error) {
+                            console.error('JSON parse error:', error);
+                        }
+                    }
+                }
+
+                messageHistory.push({ role: 'assistant', content: botMessage });
+                updateMindmap(botMessage); // 更新思维导图
+            } catch (error) {
+                console.error('Error:', error);
+                appendMessage('bot', '处理您的消息时发生错误。');
+            }
+        }
+
+        function appendMessage(sender, message) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', `${sender}-message`);
+
+            const senderName = {
+                user: '您',
+                bot: '机器人',
+                system: '系统',
+            }[sender] || '未知';
+
+            messageElement.innerHTML = `<strong>${senderName}:</strong> ${message.replace(/\n/g, '<br>')}`;
+            chatBox.appendChild(messageElement);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function updateBotMessage(message) {
+            const lastMessage = chatBox.querySelector('.bot-message:last-of-type');
+
+            if (lastMessage) {
+                lastMessage.innerHTML = `<strong>机器人:</strong> ${message.replace(/\n/g, '<br>')}`;
+            } else {
+                appendMessage('bot', message);
+            }
+        }
+
+        function updateMindmap(content) {
+            document.querySelector('textarea[name="content"]').value = content;
+            document.getElementById('contentForm').dispatchEvent(new Event('submit'));
+        }
+
+        document.getElementById('contentForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+
+            const formData = new FormData(this);
+            fetch('api.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    document.getElementById('preview').srcdoc = `
+                        <!DOCTYPE html>
+                        <html lang='en'>
+                        <head>
+                            <meta charset='UTF-8'>
+                            <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+                            <title>Markmap</title>
+                            <style>
+                              svg.markmap {
+                                width: 100%;
+                                height: 100vh;
+                              }
+                            </style>
+                            <script src='js/markmap-autoloader@0.16'><\/script>
+                        </head>
+                        <body>
+                            <div class='markmap'>
+                                <script type='text/template'>${data.data.content}<\/script>
+                            </div>
+                        </body>
+                        </html>
+                    `;
+                } else {
+                    console.error('Error:', data.message);
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        });
+
+        // 新增：下载右侧页面为图片的功能
+        document.getElementById('download-button').addEventListener('click', function() {
+            const iframe = document.getElementById('preview');
+            const iframeDocument = iframe.contentDocument || iframe.contentWindow.document;
+
+            // 获取 iframe 内容的完整高度
+            const fullHeight = Math.max(
+                iframeDocument.body.scrollHeight,
+                iframeDocument.documentElement.scrollHeight
+            );
+
+            // 设置 iframe 的高度为完整高度
+            iframe.style.height = `${fullHeight}px`;
+
+            // 使用 html2canvas 捕获完整内容
+            html2canvas(iframeDocument.body, {
+                height: fullHeight,
+                scrollY: -window.scrollY, // 禁用滚动条
+                windowWidth: iframeDocument.documentElement.scrollWidth,
+                windowHeight: fullHeight,
+                useCORS: true, // 允许跨域资源
+            }).then(canvas => {
+                // 恢复 iframe 的高度
+                iframe.style.height = '100%';
+
+                // 触发下载
+                const link = document.createElement('a');
+                link.href = canvas.toDataURL('image/png');
+                link.download = 'mindmap.png';
+                link.click();
+            }).catch(error => {
+                console.error('Error capturing iframe content:', error);
+                // 恢复 iframe 的高度
+                iframe.style.height = '100%';
+            });
+        });
+    </script>
+</body>
+</html>
